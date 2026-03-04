@@ -1,0 +1,31 @@
+{
+  "guilds": ["YOUR_GUILD_ID"],
+  "categoryName": "My Agents",
+  "agents": [
+    {
+      "name": "admin-bot",
+      "botToken": "YOUR_ADMIN_BOT_TOKEN",
+      "channels": ["admin-log"],
+      "permissions": ["ManageChannels", "ManageRoles", "SendMessages", "ReadMessageHistory", "ViewChannel"],
+      "envPrefix": "ADMIN"
+    },
+    {
+      "name": "worker-bot",
+      "botToken": "YOUR_WORKER_BOT_TOKEN",
+      "channels": ["worker-log"],
+      "permissions": ["SendMessages", "ReadMessageHistory", "ViewChannel", "EmbedLinks"],
+      "envPrefix": "WORKER"
+    }
+  ],
+  "sharedChannels": [
+    {
+      "name": "general-comms",
+      "agentAccess": ["admin-bot", "worker-bot"]
+    }
+  ],
+  "output": {
+    "envFile": "./output/.env",
+    "perAgentEnvFiles": true,
+    "summaryFile": "./output/setup-summary.md"
+  }
+}
