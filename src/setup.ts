@@ -1,17 +1,29 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { ZodError } from 'zod';
 import { ConfigSchema } from './config.schema.js';
 import { validateAllTokens } from './validate.js';
-import { setupGuildChannels } from './channels.js';
+import { setupGuildChannels, checkExistingChannels } from './channels.js';
 import { generateInviteUrls } from './invites.js';
 import { writeOutputFiles, sanitizeConfigFile } from './output.js';
 import { log } from './logger.js';
+
+async function confirm(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close();
+      resolve(!answer.match(/^[Nn]/));
+    });
+  });
+}
 
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const clean = args.includes('--clean');
+  const autoConfirm = args.includes('--yes');
   const configArg = args.find((a) => !a.startsWith('--')) ?? 'config.json';
   const configPath = resolve(configArg);
 
@@ -69,10 +81,34 @@ async function main() {
 
   // Phase 3: Setup channels
   let channelMap = new Map<string, Map<string, string>>();
+
   if (!dryRun) {
-    log.step('Phase 3: Setting up channels');
-    channelMap = await setupGuildChannels(config, botMeta, clean);
-    log.success('All channels configured');
+    log.step('Phase 3: Channel setup');
+
+    // Pre-flight: check what already exists (lightweight REST call)
+    const existing = await checkExistingChannels(config, config.agents[0].botToken);
+
+    if (existing.allExist && !clean) {
+      // Everything's already there — skip creation entirely
+      log.success(`All ${existing.total} channels already exist — nothing to create`);
+      channelMap = existing.channelMap;
+    } else {
+      // Some or all channels need to be created
+      if (existing.found > 0 && existing.missing.length > 0) {
+        log.info(`  ${existing.found} of ${existing.total} channels exist, ${existing.missing.length} to create`);
+      }
+
+      if (!autoConfirm) {
+        const ok = await confirm('  Proceed with channel setup? (Y/n): ');
+        if (!ok) {
+          log.info('Aborted.');
+          process.exit(0);
+        }
+      }
+
+      channelMap = await setupGuildChannels(config, botMeta, clean);
+      log.success('All channels configured');
+    }
   } else {
     log.step('Phase 3: Skipped (dry run)');
   }
@@ -82,23 +118,42 @@ async function main() {
   const inviteUrls = generateInviteUrls(config.agents, botMeta);
   writeOutputFiles(config, botMeta, channelMap, inviteUrls);
 
+  // Sanitize config — replace tokens with placeholders (skip during dry run)
+  if (!dryRun) {
+    sanitizeConfigFile(configPath);
+  }
+
   // Phase 5: Summary
   log.step('Setup complete');
   console.log('');
-  console.log('Invite URLs (add bots to your server):');
+
+  // Bot status: only show invite URLs for bots not yet in guild
+  const botsNeedingInvite: string[] = [];
+  console.log('Bot status:');
   for (const agent of config.agents) {
     const meta = botMeta.get(agent.name)!;
-    console.log(`  ${agent.name} (${meta.username})`);
-    console.log(`    ${inviteUrls.get(agent.name)}`);
+    const allJoined = config.guilds.every((gid) => meta.inGuilds.has(gid));
+    if (allJoined) {
+      console.log(`  ✓ ${agent.name} (${meta.username}) — in server`);
+    } else {
+      console.log(`  ⚠ ${agent.name} (${meta.username}) — needs invite:`);
+      console.log(`    ${inviteUrls.get(agent.name)}`);
+      botsNeedingInvite.push(agent.name);
+    }
+  }
+  console.log('');
+
+  if (botsNeedingInvite.length > 0) {
+    console.log(`${botsNeedingInvite.length} bot(s) need to be invited to the server.`);
+    console.log('Open the invite URLs above, select your server, and authorize.');
     console.log('');
   }
 
   if (channelMap.size > 0) {
-    console.log('Channels created:');
-    for (const [guildId, channels] of channelMap) {
-      console.log(`  Guild ${guildId}:`);
+    console.log('Channels:');
+    for (const [, channels] of channelMap) {
       for (const [name, id] of channels) {
-        console.log(`    #${name} => ${id}`);
+        console.log(`  #${name} => ${id}`);
       }
     }
     console.log('');
@@ -112,9 +167,6 @@ async function main() {
     }
   }
   console.log(`  ${config.output.summaryFile}`);
-
-  // Sanitize config file — replace tokens with placeholders
-  sanitizeConfigFile(configPath);
 }
 
 main().catch((err) => {

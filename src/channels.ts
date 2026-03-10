@@ -13,6 +13,87 @@ import type { Config } from './config.schema.js';
 import type { BotMeta } from './validate.js';
 import { log } from './logger.js';
 
+// ── Lightweight pre-flight check (REST API, no full client login) ──
+
+export interface ExistingChannelStatus {
+  allExist: boolean;
+  channelMap: Map<string, Map<string, string>>; // guildId → (channelName → channelId)
+  missing: string[];
+  found: number;
+  total: number;
+}
+
+interface DiscordAPIChannel {
+  id: string;
+  name: string;
+  type: number; // 0 = GuildText, 4 = GuildCategory
+  parent_id: string | null;
+}
+
+export async function checkExistingChannels(
+  config: Config,
+  adminToken: string,
+): Promise<ExistingChannelStatus> {
+  const allExpectedNames = [
+    ...config.agents.flatMap((a) => a.channels),
+    ...config.sharedChannels.map((s) => s.name),
+  ];
+
+  const channelMap = new Map<string, Map<string, string>>();
+  const missing: string[] = [];
+  let found = 0;
+
+  for (const guildId of config.guilds) {
+    const guildMap = new Map<string, string>();
+
+    try {
+      const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+        headers: { Authorization: `Bot ${adminToken}` },
+      });
+
+      if (!res.ok) {
+        // Bot not in guild or permissions issue — all channels missing
+        for (const name of allExpectedNames) missing.push(name);
+        channelMap.set(guildId, guildMap);
+        continue;
+      }
+
+      const guildChannels: DiscordAPIChannel[] = await res.json();
+
+      // Find the category
+      const category = guildChannels.find(
+        (ch) => ch.type === 4 && ch.name === config.categoryName,
+      );
+
+      for (const name of allExpectedNames) {
+        const ch = category
+          ? guildChannels.find(
+              (c) => c.type === 0 && c.name === name && c.parent_id === category.id,
+            )
+          : undefined;
+
+        if (ch) {
+          guildMap.set(name, ch.id);
+          found++;
+        } else {
+          missing.push(name);
+        }
+      }
+    } catch {
+      // Network error — treat all as missing
+      for (const name of allExpectedNames) missing.push(name);
+    }
+
+    channelMap.set(guildId, guildMap);
+  }
+
+  const total = allExpectedNames.length * config.guilds.length;
+
+  return { allExist: found === total, channelMap, missing, found, total };
+}
+
+// ── Full channel setup (discord.js client) ──
+
 export async function setupGuildChannels(
   config: Config,
   botMeta: Map<string, BotMeta>,

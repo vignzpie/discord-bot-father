@@ -148,7 +148,7 @@ export function sanitizeConfigFile(configPath: string): void {
 function writeGenericExample(examplePath: string, sanitized: Record<string, unknown>): void {
   const example = {
     guilds: ['YOUR_GUILD_ID'],
-    categoryName: sanitized.categoryName ?? 'My Agents',
+    categoryName: 'My Agents',
     agents: [
       {
         name: 'admin-bot',
