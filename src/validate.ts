@@ -6,6 +6,7 @@ export interface BotMeta {
   userId: string;
   applicationId: string;
   username: string;
+  inGuilds: Set<string>;
 }
 
 export async function validateAllTokens(
@@ -30,15 +31,19 @@ export async function validateAllTokens(
 
       const user = client.user!;
       const applicationId = client.application?.id ?? user.id;
-      results.set(agent.name, { userId: user.id, applicationId, username: user.tag });
-      log.success(`  ${agent.name} => ${user.tag} (app: ${applicationId})`);
 
+      const inGuilds = new Set<string>();
       for (const guildId of guildIds) {
         const guild = client.guilds.cache.get(guildId);
-        if (!guild) {
-          log.warn(`    ${agent.name} is not yet in guild ${guildId} — invite URL will be generated`);
+        if (guild) {
+          inGuilds.add(guildId);
+        } else {
+          log.warn(`    ${agent.name} is not yet in guild ${guildId} — invite needed`);
         }
       }
+
+      results.set(agent.name, { userId: user.id, applicationId, username: user.tag, inGuilds });
+      log.success(`  ${agent.name} => ${user.tag} (app: ${applicationId})`);
     } catch (err) {
       throw new Error(`Token validation failed for "${agent.name}": ${err}`);
     } finally {
